@@ -247,8 +247,12 @@ class XODataset(Dataset):
         return self.features_list[idx], torch.tensor(self.labels_list[idx], dtype=torch.float32)
 
 
-def train_model(model, train_loader, epochs=100, lr=0.01, verbose=True):
+def train_model(model, train_loader, epochs=100, lr=0.01, verbose=True, device=None):
     """Train the MLP model."""
+    if device is None:
+        device = torch.device("cpu")
+
+    model = model.to(device)
     criterion = nn.BCELoss()
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)
@@ -260,6 +264,9 @@ def train_model(model, train_loader, epochs=100, lr=0.01, verbose=True):
         total = 0
 
         for features, labels in train_loader:
+            features = features.to(device)
+            labels = labels.to(device)
+
             optimizer.zero_grad()
             outputs = model(features).squeeze()
             loss = criterion(outputs, labels)
@@ -280,8 +287,12 @@ def train_model(model, train_loader, epochs=100, lr=0.01, verbose=True):
     return model
 
 
-def evaluate_model(model, image_dirs, labels_dict, grid_size=16, verbose=True):
+def evaluate_model(model, image_dirs, labels_dict, grid_size=16, verbose=True, device=None):
     """Evaluate the model on images."""
+    if device is None:
+        device = torch.device("cpu")
+
+    model = model.to(device)
     model.eval()
     results = []
     correct = 0
@@ -302,9 +313,10 @@ def evaluate_model(model, image_dirs, labels_dict, grid_size=16, verbose=True):
                 continue
 
             features = preprocess_image(img_path, grid_size, augment=False)
-            features = features.unsqueeze(0)
+            features = features.unsqueeze(0).to(device)
 
-            prob = model.predict_proba(features).item()
+            with torch.no_grad():
+                prob = model(features).squeeze().item()
             pred = 1 if prob > 0.5 else 0
             pred_label = "X" if pred == 1 else "O"
             true_label = labels_dict[img_path.name]
@@ -365,7 +377,23 @@ if __name__ == "__main__":
                         help="Path to save/load model (default: mlp_model.pth)")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Show detailed output")
+    parser.add_argument("--gpu", action="store_true",
+                        help="Use GPU acceleration (MPS on Apple Silicon)")
     args = parser.parse_args()
+
+    # Set up device
+    if args.gpu:
+        if torch.backends.mps.is_available():
+            device = torch.device("mps")
+            print(f"Using GPU: Apple MPS (Metal Performance Shaders)")
+        elif torch.cuda.is_available():
+            device = torch.device("cuda")
+            print(f"Using GPU: CUDA")
+        else:
+            print("Warning: GPU requested but not available, falling back to CPU")
+            device = torch.device("cpu")
+    else:
+        device = torch.device("cpu")
 
     print("=" * 60)
     print("Classifier 2: Multi-Layer Perceptron (MLP)")
@@ -407,9 +435,10 @@ if __name__ == "__main__":
         model = MLP(grid_size=16)
         print(f"\nTraining for {args.epochs} epochs...")
         print()
-        model = train_model(model, train_loader, epochs=args.epochs, verbose=True)
+        model = train_model(model, train_loader, epochs=args.epochs, verbose=True, device=device)
 
-        # Save model
+        # Save model (move to CPU first for compatibility)
+        model = model.to("cpu")
         save_model(model, model_path)
         print()
     else:
@@ -425,20 +454,22 @@ if __name__ == "__main__":
             train_loader = DataLoader(dataset, batch_size=16, shuffle=True)
 
             model = MLP(grid_size=16)
-            model = train_model(model, train_loader, epochs=50, verbose=True)
+            model = train_model(model, train_loader, epochs=50, verbose=True, device=device)
+            model = model.to("cpu")
             save_model(model, model_path)
             print()
 
     print()
     print("EVALUATION")
     print("-" * 40)
-    results = evaluate_model(model, image_dirs, LABELS, grid_size=16, verbose=True)
+    results = evaluate_model(model, image_dirs, LABELS, grid_size=16, verbose=True, device=device)
 
     print()
     print("=" * 60)
     print("USAGE:")
     print("  python classifier2_mlp.py                    # Evaluate with saved model")
     print("  python classifier2_mlp.py --train            # Train new model")
+    print("  python classifier2_mlp.py --train --gpu      # Train using GPU (Apple MPS)")
     print("  python classifier2_mlp.py --train --epochs 200")
     print("  python classifier2_mlp.py -d images          # Evaluate on specific directory")
     print("=" * 60)
