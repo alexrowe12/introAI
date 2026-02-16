@@ -1,6 +1,8 @@
 .claude
 images/
 images2/
+images3/
 images/*
 images2/*
+images3/*
 .DS_Store

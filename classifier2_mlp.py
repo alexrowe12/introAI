@@ -35,10 +35,10 @@ class MLP(nn.Module):
         self.network = nn.Sequential(
             nn.Linear(input_size, 64),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.5),
             nn.Linear(64, 32),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.5),
             nn.Linear(32, 1),
             nn.Sigmoid()
         )
@@ -80,6 +80,21 @@ LABELS = {
     "image8.jpeg": "X",
     "image9.jpeg": "X",
     "image10.jpeg": "O",
+    # images3/ directory
+    "IMG_3240.jpg": "X",
+    "IMG_3241.jpg": "O",
+    "IMG_3242.jpg": "X",
+    "IMG_3243.jpg": "O",
+    "IMG_3244.jpg": "O",
+    "IMG_3245.jpg": "O",
+    "IMG_3246.jpg": "X",
+    "IMG_3247.jpg": "X",
+    "IMG_3248.jpg": "O",
+    "IMG_3249.jpg": "X",
+    "IMG_3250.jpg": "X",
+    "IMG_3251.jpg": "X",
+    "IMG_3252.jpg": "X",
+    "IMG_3253.jpg": "O",
 }
 
 
