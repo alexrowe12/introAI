@@ -18,6 +18,7 @@ import torch.nn as nn
 from PIL import Image
 import numpy as np
 from pathlib import Path
+import argparse
 
 
 class ManualPerceptron(nn.Module):
@@ -156,7 +157,9 @@ def test_on_dataset(image_dir, labels_dict=None, grid_size=16, debug=False):
     correct = 0
     total = 0
 
-    for img_path in sorted(image_dir.glob("*.jpg")):
+    # Support both .jpg and .jpeg extensions
+    image_files = list(image_dir.glob("*.jpg")) + list(image_dir.glob("*.jpeg"))
+    for img_path in sorted(image_files):
         pred_label, confidence, raw_score = classify_image(img_path, model, grid_size, debug)
 
         result = {
@@ -217,6 +220,7 @@ def visualize_weights(grid_size=16):
 
 # Ground truth labels
 LABELS = {
+    # images/ directory
     "IMG_3134.jpg": "X",
     "IMG_3135.jpg": "O",
     "IMG_3136.jpg": "X",
@@ -227,10 +231,28 @@ LABELS = {
     "IMG_3141.jpg": "O",
     "IMG_3142.jpg": "O",
     "IMG_3143.jpg": "X",
+    # images2/ directory (sorted alphabetically: 1, 10, 2, 3, 4, 5, 6, 7, 8, 9)
+    "image1.jpeg": "O",
+    "image10.jpeg": "O",
+    "image2.jpeg": "X",
+    "image3.jpeg": "O",
+    "image4.jpeg": "X",
+    "image5.jpeg": "O",
+    "image6.jpeg": "O",
+    "image7.jpeg": "X",
+    "image8.jpeg": "X",
+    "image9.jpeg": "O",
 }
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Classify X vs O images using a manually crafted perceptron")
+    parser.add_argument("-d", "--dir", type=str, default="images",
+                        help="Directory containing images to classify (default: images)")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Show detailed debug output for each image")
+    args = parser.parse_args()
+
     print("=" * 60)
     print("Classifier 1: Manually Crafted Perceptron")
     print("=" * 60)
@@ -254,13 +276,21 @@ if __name__ == "__main__":
     print("TESTING ON DATASET:")
     print("-" * 40)
 
-    image_dir = Path(__file__).parent / "images"
+    # Resolve image directory path
+    image_dir = Path(args.dir)
+    if not image_dir.is_absolute():
+        image_dir = Path(__file__).parent / args.dir
+
     if image_dir.exists():
-        test_on_dataset(image_dir, labels_dict=LABELS, grid_size=16, debug=True)
+        print(f"Using image directory: {image_dir}")
+        print()
+        test_on_dataset(image_dir, labels_dict=LABELS, grid_size=16, debug=args.verbose)
+    else:
+        print(f"Error: Directory not found: {image_dir}")
 
     print()
     print("=" * 60)
     print("USAGE:")
-    print("  from classifier1_perceptron import classify_image")
-    print("  label, conf, score = classify_image('path/to/image.jpg')")
+    print("  python classifier1_perceptron.py -d <image_directory>")
+    print("  python classifier1_perceptron.py -d images2 -v")
     print("=" * 60)
