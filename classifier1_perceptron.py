@@ -86,9 +86,72 @@ class ManualPerceptron(nn.Module):
             return torch.sigmoid(self.forward(x) * 15).squeeze()
 
 
+def find_frame_bounds(img_array, debug=False):
+    """
+    Detect the rectangular frame in the image and return its inner bounds.
+
+    Returns (y1, y2, x1, x2) for the region inside the frame.
+    """
+    h, w = img_array.shape
+
+    # Invert so ink = bright
+    inverted = 255 - img_array
+
+    # Threshold to find ink pixels (top 10% brightness)
+    threshold = np.percentile(inverted, 90)
+    ink_mask = inverted > threshold
+
+    # Find rows and columns that contain significant ink
+    row_ink = np.sum(ink_mask, axis=1)
+    col_ink = np.sum(ink_mask, axis=0)
+
+    # Find the frame boundaries by looking for rows/cols with ink
+    # The frame should be the outermost ink lines
+    row_threshold = w * 0.02  # At least 2% of width has ink
+    col_threshold = h * 0.02  # At least 2% of height has ink
+
+    rows_with_ink = np.where(row_ink > row_threshold)[0]
+    cols_with_ink = np.where(col_ink > col_threshold)[0]
+
+    if len(rows_with_ink) < 2 or len(cols_with_ink) < 2:
+        # Fallback to center crop if frame detection fails
+        margin_h = int(h * 0.30)
+        margin_w = int(w * 0.30)
+        return margin_h, h - margin_h, margin_w, w - margin_w
+
+    # Frame boundaries (outer edges of the frame)
+    frame_top = rows_with_ink[0]
+    frame_bottom = rows_with_ink[-1]
+    frame_left = cols_with_ink[0]
+    frame_right = cols_with_ink[-1]
+
+    # Calculate frame dimensions
+    frame_height = frame_bottom - frame_top
+    frame_width = frame_right - frame_left
+
+    # Crop to INSIDE the frame (add margin to exclude frame lines)
+    margin = 0.1  # 10% margin inside the frame
+    y1 = int(frame_top + frame_height * margin)
+    y2 = int(frame_bottom - frame_height * margin)
+    x1 = int(frame_left + frame_width * margin)
+    x2 = int(frame_right - frame_width * margin)
+
+    # Ensure valid bounds
+    y1 = max(0, y1)
+    y2 = min(h, y2)
+    x1 = max(0, x1)
+    x2 = min(w, x2)
+
+    if debug:
+        print(f"Frame detected: top={frame_top}, bottom={frame_bottom}, left={frame_left}, right={frame_right}")
+        print(f"Inner region: y=[{y1}:{y2}], x=[{x1}:{x2}]")
+
+    return y1, y2, x1, x2
+
+
 def preprocess_image(image_path, grid_size=16, debug=False):
     """
-    Preprocess image: crop center, detect ink, downsample.
+    Preprocess image: detect frame, crop inside it, center on ink, downsample.
     """
     # Load and convert to grayscale
     img = Image.open(image_path).convert('L')
@@ -96,26 +159,48 @@ def preprocess_image(image_path, grid_size=16, debug=False):
 
     h, w = img_array.shape
 
-    # Crop to center 40% - this should capture the shape and exclude most of the frame
-    margin_h = int(h * 0.30)
-    margin_w = int(w * 0.30)
-    cropped = img_array[margin_h:h-margin_h, margin_w:w-margin_w]
+    # Detect frame and get inner bounds
+    y1, y2, x1, x2 = find_frame_bounds(img_array, debug=debug)
+
+    # Crop to inside the frame
+    cropped = img_array[y1:y2, x1:x2]
 
     # Invert so ink = bright
-    cropped = 255 - cropped
+    inverted = 255 - cropped
 
-    # Adaptive thresholding: top percentile = ink
-    threshold = np.percentile(cropped, 88)
-    ink_mask = (cropped > threshold).astype(np.float32)
+    # Find ink using threshold
+    threshold = np.percentile(inverted, 88)
+    ink_mask = (inverted > threshold).astype(np.float32)
+
+    # Find centroid of ink to center the shape
+    ink_coords = np.where(ink_mask > 0)
+    if len(ink_coords[0]) > 0:
+        cy = int(np.mean(ink_coords[0]))
+        cx = int(np.mean(ink_coords[1]))
+    else:
+        cy, cx = ink_mask.shape[0] // 2, ink_mask.shape[1] // 2
+
+    # Extract a square region centered on the ink centroid
+    ch, cw = ink_mask.shape
+    region_size = min(ch, cw) * 0.7  # 70% of the smaller dimension
+
+    half_size = int(region_size // 2)
+    cy1 = max(0, cy - half_size)
+    cy2 = min(ch, cy + half_size)
+    cx1 = max(0, cx - half_size)
+    cx2 = min(cw, cx + half_size)
+
+    # Crop centered on ink
+    centered_ink = ink_mask[cy1:cy2, cx1:cx2]
 
     # Resize to grid_size x grid_size
-    ink_img = Image.fromarray((ink_mask * 255).astype(np.uint8))
+    ink_img = Image.fromarray((centered_ink * 255).astype(np.uint8))
     resized = ink_img.resize((grid_size, grid_size), Image.Resampling.BILINEAR)
     resized_array = np.array(resized, dtype=np.float32) / 255.0
 
     if debug:
         print(f"Image: {Path(image_path).name}")
-        print(f"Cropped to center: [{margin_h}:{h-margin_h}, {margin_w}:{w-margin_w}]")
+        print(f"Ink centroid: ({cx}, {cy}), Region: [{cx1}:{cx2}, {cy1}:{cy2}]")
         print(f"Ink coverage: {resized_array.mean():.1%}")
 
         # 8x8 visualization
@@ -231,17 +316,17 @@ LABELS = {
     "IMG_3141.jpg": "O",
     "IMG_3142.jpg": "O",
     "IMG_3143.jpg": "X",
-    # images2/ directory (sorted alphabetically: 1, 10, 2, 3, 4, 5, 6, 7, 8, 9)
+    # images2/ directory
     "image1.jpeg": "O",
-    "image10.jpeg": "O",
-    "image2.jpeg": "X",
-    "image3.jpeg": "O",
-    "image4.jpeg": "X",
-    "image5.jpeg": "O",
+    "image2.jpeg": "O",
+    "image3.jpeg": "X",
+    "image4.jpeg": "O",
+    "image5.jpeg": "X",
     "image6.jpeg": "O",
-    "image7.jpeg": "X",
+    "image7.jpeg": "O",
     "image8.jpeg": "X",
-    "image9.jpeg": "O",
+    "image9.jpeg": "X",
+    "image10.jpeg": "O",
 }
 
 
