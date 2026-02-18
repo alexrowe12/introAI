@@ -134,6 +134,18 @@ LABELS = {
     "img8.jpeg": "O",
     "img9.jpeg": "O",
     "img10.jpeg": "O",
+    "IMG_3270_2.jpg": "O",
+    "IMG_3271_2.jpg": "X",
+    "IMG_3272_2.jpg": "X",
+    "IMG_3273_2.jpg": "O",
+    "IMG_3274_2.jpg": "O",
+    "IMG_3275_2.jpg": "X",
+    "IMG_3276_2.jpg": "O",
+    "IMG_3277_2.jpg": "X",
+    "IMG_3278_2.jpg": "X",
+    "IMG_3279_2.jpg": "O",
+    "IMG_3280_2.jpg": "X",
+    "IMG_3281_2.jpg": "X",
 }
 
 

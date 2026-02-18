@@ -42,9 +42,11 @@ class SimpleCNN(nn.Module):
 
         self.conv_layers = nn.Sequential(
             nn.Conv2d(1, 16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
             nn.ReLU(),
             nn.MaxPool2d(2),
             nn.Conv2d(16, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.MaxPool2d(2),
         )
@@ -158,6 +160,19 @@ LABELS = {
     "img8.jpeg": "O",
     "img9.jpeg": "O",
     "img10.jpeg": "O",
+    # from testSet2/
+    "IMG_3270_2.jpg": "O",
+    "IMG_3271_2.jpg": "X",
+    "IMG_3272_2.jpg": "X",
+    "IMG_3273_2.jpg": "O",
+    "IMG_3274_2.jpg": "O",
+    "IMG_3275_2.jpg": "X",
+    "IMG_3276_2.jpg": "O",
+    "IMG_3277_2.jpg": "X",
+    "IMG_3278_2.jpg": "X",
+    "IMG_3279_2.jpg": "O",
+    "IMG_3280_2.jpg": "X",
+    "IMG_3281_2.jpg": "X",
 }
 
 
@@ -240,8 +255,30 @@ def preprocess_image(image_path, grid_size=32, augment=False):
     crop = Image.fromarray((binary * 255).astype(np.uint8))
 
     if augment:
+        # Random horizontal flip (X mirrored = X, O mirrored = O)
+        if random.random() < 0.5:
+            crop = crop.transpose(Image.FLIP_LEFT_RIGHT)
+
+        # Random rotation ±15°
         angle = random.uniform(-15, 15)
         crop = crop.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False)
+
+        # Random scale 0.85–1.15x: resize then center-paste onto original canvas
+        scale = random.uniform(0.85, 1.15)
+        w, h = crop.size
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        scaled = crop.resize((new_w, new_h), Image.Resampling.BILINEAR)
+        canvas = Image.new('L', (w, h), 0)
+        canvas.paste(scaled, ((w - new_w) // 2, (h - new_h) // 2))
+        crop = canvas
+
+        # Random translation ±10%
+        tx = int(w * random.uniform(-0.1, 0.1))
+        ty = int(h * random.uniform(-0.1, 0.1))
+        canvas = Image.new('L', crop.size, 0)
+        canvas.paste(crop, (tx, ty))
+        crop = canvas
 
     resized = crop.resize((grid_size, grid_size), Image.Resampling.BILINEAR)
     resized_array = np.array(resized, dtype=np.float32) / 255.0
