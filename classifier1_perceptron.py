@@ -367,7 +367,19 @@ if __name__ == "__main__":
                         help="Directory containing images to classify (default: trainingData)")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Show detailed debug output for each image")
+    parser.add_argument("--predict", type=str, default=None,
+                        help="Predict a single image file and exit")
     args = parser.parse_args()
+
+    # Single-image prediction mode
+    if args.predict:
+        img_path = Path(args.predict)
+        if not img_path.exists():
+            print(f"Error: File not found: {img_path}")
+            exit(1)
+        label, confidence, _ = classify_image(img_path)
+        print(f"Prediction: {label} (confidence: {confidence:.1%})")
+        exit(0)
 
     print("=" * 60)
     print("Classifier 1: Manually Crafted Perceptron")

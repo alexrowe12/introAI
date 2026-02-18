@@ -462,6 +462,8 @@ if __name__ == "__main__":
                         help="Show detailed output")
     parser.add_argument("--gpu", action="store_true",
                         help="Use GPU acceleration (MPS on Apple Silicon)")
+    parser.add_argument("--predict", type=str, default=None,
+                        help="Predict a single image file and exit")
     args = parser.parse_args()
 
     # Set up device
@@ -477,6 +479,30 @@ if __name__ == "__main__":
             device = torch.device("cpu")
     else:
         device = torch.device("cpu")
+
+    # Single-image prediction mode
+    if args.predict:
+        img_path = Path(args.predict)
+        if not img_path.exists():
+            print(f"Error: File not found: {img_path}")
+            exit(1)
+        script_dir = Path(__file__).parent
+        model_path = Path(args.model)
+        if not model_path.is_absolute():
+            model_path = script_dir / args.model
+        if not model_path.exists():
+            print(f"Error: No model found at {model_path}. Train first with --train.")
+            exit(1)
+        model = load_model(model_path)
+        model.eval()
+        features = preprocess_image(img_path, grid_size=model.grid_size)
+        features = features.unsqueeze(0)
+        with torch.no_grad():
+            prob = model(features).squeeze().item()
+        pred = "X" if prob > 0.5 else "O"
+        confidence = prob if prob > 0.5 else 1 - prob
+        print(f"Prediction: {pred} (confidence: {confidence:.1%})")
+        exit(0)
 
     print("=" * 60)
     print("Classifier 3: Convolutional Neural Network (CNN)")
