@@ -15,7 +15,7 @@ Strategy:
 
 import torch
 import torch.nn as nn
-from PIL import Image
+from PIL import Image, ImageOps
 import numpy as np
 from pathlib import Path
 import argparse
@@ -86,129 +86,92 @@ class ManualPerceptron(nn.Module):
             return torch.sigmoid(self.forward(x) * 15).squeeze()
 
 
-def find_frame_bounds(img_array, debug=False):
-    """
-    Detect the rectangular frame in the image and return its inner bounds.
-
-    Returns (y1, y2, x1, x2) for the region inside the frame.
-    """
-    h, w = img_array.shape
-
-    # Invert so ink = bright
-    inverted = 255 - img_array
-
-    # Threshold to find ink pixels (top 10% brightness)
-    threshold = np.percentile(inverted, 90)
-    ink_mask = inverted > threshold
-
-    # Find rows and columns that contain significant ink
-    row_ink = np.sum(ink_mask, axis=1)
-    col_ink = np.sum(ink_mask, axis=0)
-
-    # Find the frame boundaries by looking for rows/cols with ink
-    # The frame should be the outermost ink lines
-    row_threshold = w * 0.02  # At least 2% of width has ink
-    col_threshold = h * 0.02  # At least 2% of height has ink
-
-    rows_with_ink = np.where(row_ink > row_threshold)[0]
-    cols_with_ink = np.where(col_ink > col_threshold)[0]
-
-    if len(rows_with_ink) < 2 or len(cols_with_ink) < 2:
-        # Fallback to center crop if frame detection fails
-        margin_h = int(h * 0.30)
-        margin_w = int(w * 0.30)
-        return margin_h, h - margin_h, margin_w, w - margin_w
-
-    # Frame boundaries (outer edges of the frame)
-    frame_top = rows_with_ink[0]
-    frame_bottom = rows_with_ink[-1]
-    frame_left = cols_with_ink[0]
-    frame_right = cols_with_ink[-1]
-
-    # Calculate frame dimensions
-    frame_height = frame_bottom - frame_top
-    frame_width = frame_right - frame_left
-
-    # Crop to INSIDE the frame (add margin to exclude frame lines)
-    margin = 0.1  # 10% margin inside the frame
-    y1 = int(frame_top + frame_height * margin)
-    y2 = int(frame_bottom - frame_height * margin)
-    x1 = int(frame_left + frame_width * margin)
-    x2 = int(frame_right - frame_width * margin)
-
-    # Ensure valid bounds
-    y1 = max(0, y1)
-    y2 = min(h, y2)
-    x1 = max(0, x1)
-    x2 = min(w, x2)
-
-    if debug:
-        print(f"Frame detected: top={frame_top}, bottom={frame_bottom}, left={frame_left}, right={frame_right}")
-        print(f"Inner region: y=[{y1}:{y2}], x=[{x1}:{x2}]")
-
-    return y1, y2, x1, x2
-
-
 def preprocess_image(image_path, grid_size=16, debug=False):
     """
-    Preprocess image: detect frame, crop inside it, center on ink, downsample.
+    Preprocess image:
+    1. Correct EXIF orientation
+    2. Convert to grayscale
+    3. Otsu threshold to find ink
+    4. Find bounding box of all ink (the drawn frame + shape)
+    5. Shrink inward by 15% on each side to strip the frame border
+    6. Resize remaining region to grid_size x grid_size
     """
-    # Load and convert to grayscale
-    img = Image.open(image_path).convert('L')
+    img = ImageOps.exif_transpose(Image.open(image_path)).convert('L')
     img_array = np.array(img, dtype=np.float32)
-
     h, w = img_array.shape
 
-    # Detect frame and get inner bounds
-    y1, y2, x1, x2 = find_frame_bounds(img_array, debug=debug)
+    # Otsu threshold: find the natural split between ink and background
+    flat = img_array.flatten()
+    hist, _ = np.histogram(flat, bins=256, range=(0, 256))
+    hist = hist.astype(float)
+    total = hist.sum()
+    sum_total = np.dot(np.arange(256), hist)
+    sum_bg, count_bg, best_thresh, best_var = 0.0, 0.0, 128, 0.0
+    for t in range(256):
+        count_bg += hist[t]
+        if count_bg == 0 or count_bg == total:
+            continue
+        count_fg = total - count_bg
+        sum_bg += t * hist[t]
+        mean_bg = sum_bg / count_bg
+        mean_fg = (sum_total - sum_bg) / count_fg
+        var = count_bg * count_fg * (mean_bg - mean_fg) ** 2
+        if var > best_var:
+            best_var, best_thresh = var, t
 
-    # Crop to inside the frame
-    cropped = img_array[y1:y2, x1:x2]
+    ink_mask = img_array < best_thresh  # dark pixels = ink
 
-    # Invert so ink = bright
-    inverted = 255 - cropped
-
-    # Find ink using threshold
-    threshold = np.percentile(inverted, 88)
-    ink_mask = (inverted > threshold).astype(np.float32)
-
-    # Find centroid of ink to center the shape
-    ink_coords = np.where(ink_mask > 0)
-    if len(ink_coords[0]) > 0:
-        cy = int(np.mean(ink_coords[0]))
-        cx = int(np.mean(ink_coords[1]))
+    # Bounding box of all ink
+    rows = np.any(ink_mask, axis=1)
+    cols = np.any(ink_mask, axis=0)
+    if not rows.any() or not cols.any():
+        region = img_array
     else:
-        cy, cx = ink_mask.shape[0] // 2, ink_mask.shape[1] // 2
+        y1, y2 = np.where(rows)[0][[0, -1]]
+        x1, x2 = np.where(cols)[0][[0, -1]]
 
-    # Extract a square region centered on the ink centroid
-    ch, cw = ink_mask.shape
-    region_size = min(ch, cw) * 0.7  # 70% of the smaller dimension
+        # Shrink inward by 15% to strip the drawn frame border
+        dy = int((y2 - y1) * 0.15)
+        dx = int((x2 - x1) * 0.15)
+        y1 = min(h - 1, y1 + dy)
+        y2 = max(0, y2 - dy)
+        x1 = min(w - 1, x1 + dx)
+        x2 = max(0, x2 - dx)
 
-    half_size = int(region_size // 2)
-    cy1 = max(0, cy - half_size)
-    cy2 = min(ch, cy + half_size)
-    cx1 = max(0, cx - half_size)
-    cx2 = min(cw, cx + half_size)
+        region = img_array[y1:y2, x1:x2]
 
-    # Crop centered on ink
-    centered_ink = ink_mask[cy1:cy2, cx1:cx2]
+    # Re-run Otsu on the cropped region for a tighter threshold, then binarize
+    flat = region.flatten()
+    hist, _ = np.histogram(flat, bins=256, range=(0, 256))
+    hist = hist.astype(float)
+    total = hist.sum()
+    sum_total = np.dot(np.arange(256), hist)
+    sum_bg2, count_bg2, best_thresh2, best_var2 = 0.0, 0.0, 128, 0.0
+    for t in range(256):
+        count_bg2 += hist[t]
+        if count_bg2 == 0 or count_bg2 == total:
+            continue
+        count_fg2 = total - count_bg2
+        sum_bg2 += t * hist[t]
+        mean_bg2 = sum_bg2 / count_bg2
+        mean_fg2 = (sum_total - sum_bg2) / count_fg2
+        var2 = count_bg2 * count_fg2 * (mean_bg2 - mean_fg2) ** 2
+        if var2 > best_var2:
+            best_var2, best_thresh2 = var2, t
 
-    # Resize to grid_size x grid_size
-    ink_img = Image.fromarray((centered_ink * 255).astype(np.uint8))
-    resized = ink_img.resize((grid_size, grid_size), Image.Resampling.BILINEAR)
+    # Binary mask: 1.0 = ink, 0.0 = background
+    binary = (region < best_thresh2).astype(np.float32)
+    crop = Image.fromarray((binary * 255).astype(np.uint8))
+
+    resized = crop.resize((grid_size, grid_size), Image.Resampling.BILINEAR)
     resized_array = np.array(resized, dtype=np.float32) / 255.0
 
     if debug:
         print(f"Image: {Path(image_path).name}")
-        print(f"Ink centroid: ({cx}, {cy}), Region: [{cx1}:{cx2}, {cy1}:{cy2}]")
         print(f"Ink coverage: {resized_array.mean():.1%}")
-
-        # 8x8 visualization
-        display = np.array(Image.fromarray((resized_array * 255).astype(np.uint8)).resize(
-            (8, 8), Image.Resampling.BILINEAR)) / 255.0
         print("Grid (# = ink):")
-        for row in display:
-            print(" ".join(['#' if v > 0.25 else '.' for v in row]))
+        for row in resized_array[::2]:
+            print(" ".join(['#' if v > 0.3 else '.' for v in row]))
         print()
 
     return torch.tensor(resized_array.flatten(), dtype=torch.float32)
@@ -382,6 +345,19 @@ LABELS = {
     "img8.jpeg": "O",
     "img9.jpeg": "O",
     "img10.jpeg": "O",
+    # from testSet2/
+    "IMG_3270_2.jpg": "O",
+    "IMG_3271_2.jpg": "X",
+    "IMG_3272_2.jpg": "X",
+    "IMG_3273_2.jpg": "O",
+    "IMG_3274_2.jpg": "O",
+    "IMG_3275_2.jpg": "X",
+    "IMG_3276_2.jpg": "O",
+    "IMG_3277_2.jpg": "X",
+    "IMG_3278_2.jpg": "X",
+    "IMG_3279_2.jpg": "O",
+    "IMG_3280_2.jpg": "X",
+    "IMG_3281_2.jpg": "X",
 }
 
 
