@@ -303,9 +303,10 @@ def visualize_weights(grid_size=16):
     print(f"Ring weights sum to: {weights[weights < 0].sum():.3f}")
 
 
-# Ground truth labels
+# Ground truth labels for trainingData/
+# Add "X" or "O" for any unlabeled images below
 LABELS = {
-    # images/ directory
+    # from images/
     "IMG_3134.jpg": "X",
     "IMG_3135.jpg": "O",
     "IMG_3136.jpg": "X",
@@ -316,7 +317,7 @@ LABELS = {
     "IMG_3141.jpg": "O",
     "IMG_3142.jpg": "O",
     "IMG_3143.jpg": "X",
-    # images2/ directory
+    # from images2/
     "image1.jpeg": "O",
     "image2.jpeg": "O",
     "image3.jpeg": "X",
@@ -327,7 +328,7 @@ LABELS = {
     "image8.jpeg": "X",
     "image9.jpeg": "X",
     "image10.jpeg": "O",
-    # images3/ directory
+    # from images3/
     "IMG_3240.jpg": "X",
     "IMG_3241.jpg": "O",
     "IMG_3242.jpg": "X",
@@ -342,13 +343,52 @@ LABELS = {
     "IMG_3251.jpg": "X",
     "IMG_3252.jpg": "X",
     "IMG_3253.jpg": "O",
+    # from images4/
+    "IMG_3263.jpg": "X",
+    "IMG_3264.jpg": "O",
+    "IMG_3265.jpg": "X",
+    "IMG_3266.jpg": "O",
+    "IMG_3267.jpg": "X",
+    "IMG_3268.jpg": "X",
+    "IMG_3269.jpg": "O",
+    "IMG_4244.jpg": "O",
+    "IMG_4245.jpg": "X",
+    "IMG_4246.jpg": "X",
+    "IMG_4247.jpg": "X",
+    "IMG_4248.jpg": "O",
+    "IMG_4249.jpg": "O",
+    "IMG_4250.jpg": "X",
+    "IMG_4251.jpg": "O",
+    "IMG_4252.jpg": "O",
+    "IMG_4253.jpg": "O",
+    "IMG_4254.jpg": "X",
+    "IMG_4255.jpg": "X",
+    "IMG_4256.jpg": "O",
+    "IMG_4257.jpg": "O",
+    "IMG_4258.jpg": "X",
+    "IMG_4259.jpg": "X",
+    "IMG_4260.jpg": "O",
+    "IMG_4261.jpg": "O",
+    "IMG_4262.jpg": "O",
+    "IMG_4263.jpg": "X",
+    "IMG_4264.jpg": "X",
+    "img1.jpeg": "X",
+    "img2.jpeg": "O",
+    "img3.jpeg": "X",
+    "img4.jpeg": "O",
+    "img5.jpeg": "X",
+    "img6.jpeg": "O",
+    "img7.jpeg": "X",
+    "img8.jpeg": "O",
+    "img9.jpeg": "O",
+    "img10.jpeg": "O",
 }
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Classify X vs O images using a manually crafted perceptron")
-    parser.add_argument("-d", "--dir", type=str, default="images",
-                        help="Directory containing images to classify (default: images)")
+    parser.add_argument("-d", "--dir", type=str, default="trainingData",
+                        help="Directory containing images to classify (default: trainingData)")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Show detailed debug output for each image")
     args = parser.parse_args()

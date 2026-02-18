@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from PIL import Image
+from PIL import Image, ImageOps
 import numpy as np
 from pathlib import Path
 import argparse
@@ -56,9 +56,10 @@ class MLP(nn.Module):
             return self.forward(x).squeeze()
 
 
-# Ground truth labels (same as classifier1)
+# Ground truth labels for trainingData/
+# Add "X" or "O" for any unlabeled images below
 LABELS = {
-    # images/ directory
+    # from images/
     "IMG_3134.jpg": "X",
     "IMG_3135.jpg": "O",
     "IMG_3136.jpg": "X",
@@ -69,7 +70,7 @@ LABELS = {
     "IMG_3141.jpg": "O",
     "IMG_3142.jpg": "O",
     "IMG_3143.jpg": "X",
-    # images2/ directory
+    # from images2/
     "image1.jpeg": "O",
     "image2.jpeg": "O",
     "image3.jpeg": "X",
@@ -80,7 +81,7 @@ LABELS = {
     "image8.jpeg": "X",
     "image9.jpeg": "X",
     "image10.jpeg": "O",
-    # images3/ directory
+    # from images3/
     "IMG_3240.jpg": "X",
     "IMG_3241.jpg": "O",
     "IMG_3242.jpg": "X",
@@ -95,113 +96,130 @@ LABELS = {
     "IMG_3251.jpg": "X",
     "IMG_3252.jpg": "X",
     "IMG_3253.jpg": "O",
+    "IMG_3263.jpg": "X",
+    "IMG_3264.jpg": "O",
+    "IMG_3265.jpg": "X",
+    "IMG_3266.jpg": "O",
+    "IMG_3267.jpg": "X",
+    "IMG_3268.jpg": "X",
+    "IMG_3269.jpg": "O",
+    "IMG_4244.jpg": "O",
+    "IMG_4245.jpg": "X",
+    "IMG_4246.jpg": "X",
+    "IMG_4247.jpg": "X",
+    "IMG_4248.jpg": "O",
+    "IMG_4249.jpg": "O",
+    "IMG_4250.jpg": "X",
+    "IMG_4251.jpg": "O",
+    "IMG_4252.jpg": "O",
+    "IMG_4253.jpg": "O",
+    "IMG_4254.jpg": "X",
+    "IMG_4255.jpg": "X",
+    "IMG_4256.jpg": "O",
+    "IMG_4257.jpg": "O",
+    "IMG_4258.jpg": "X",
+    "IMG_4259.jpg": "X",
+    "IMG_4260.jpg": "O",
+    "IMG_4261.jpg": "O",
+    "IMG_4262.jpg": "O",
+    "IMG_4263.jpg": "X",
+    "IMG_4264.jpg": "X",
+    "img1.jpeg": "X",
+    "img2.jpeg": "O",
+    "img3.jpeg": "X",
+    "img4.jpeg": "O",
+    "img5.jpeg": "X",
+    "img6.jpeg": "O",
+    "img7.jpeg": "X",
+    "img8.jpeg": "O",
+    "img9.jpeg": "O",
+    "img10.jpeg": "O",
 }
-
-
-def find_frame_bounds(img_array, debug=False):
-    """
-    Detect the rectangular frame in the image and return its inner bounds.
-    Returns (y1, y2, x1, x2) for the region inside the frame.
-    """
-    h, w = img_array.shape
-    inverted = 255 - img_array
-    threshold = np.percentile(inverted, 90)
-    ink_mask = inverted > threshold
-
-    row_ink = np.sum(ink_mask, axis=1)
-    col_ink = np.sum(ink_mask, axis=0)
-
-    row_threshold = w * 0.02
-    col_threshold = h * 0.02
-
-    rows_with_ink = np.where(row_ink > row_threshold)[0]
-    cols_with_ink = np.where(col_ink > col_threshold)[0]
-
-    if len(rows_with_ink) < 2 or len(cols_with_ink) < 2:
-        margin_h = int(h * 0.30)
-        margin_w = int(w * 0.30)
-        return margin_h, h - margin_h, margin_w, w - margin_w
-
-    frame_top = rows_with_ink[0]
-    frame_bottom = rows_with_ink[-1]
-    frame_left = cols_with_ink[0]
-    frame_right = cols_with_ink[-1]
-
-    frame_height = frame_bottom - frame_top
-    frame_width = frame_right - frame_left
-
-    margin = 0.1
-    y1 = int(frame_top + frame_height * margin)
-    y2 = int(frame_bottom - frame_height * margin)
-    x1 = int(frame_left + frame_width * margin)
-    x2 = int(frame_right - frame_width * margin)
-
-    y1 = max(0, y1)
-    y2 = min(h, y2)
-    x1 = max(0, x1)
-    x2 = min(w, x2)
-
-    return y1, y2, x1, x2
 
 
 def preprocess_image(image_path, grid_size=16, augment=False):
     """
-    Preprocess image: detect frame, crop inside it, center on ink, downsample.
-
-    If augment=True, applies random transformations for data augmentation.
+    Preprocess image:
+    1. Correct EXIF orientation
+    2. Convert to grayscale
+    3. Otsu threshold to find ink
+    4. Find bounding box of all ink (the drawn frame + shape)
+    5. Shrink inward by 15% on each side to strip the frame border
+    6. Resize remaining region to grid_size x grid_size
     """
-    img = Image.open(image_path).convert('L')
+    img = ImageOps.exif_transpose(Image.open(image_path)).convert('L')
     img_array = np.array(img, dtype=np.float32)
+    h, w = img_array.shape
 
-    y1, y2, x1, x2 = find_frame_bounds(img_array)
-    cropped = img_array[y1:y2, x1:x2]
+    # Otsu threshold: find the natural split between ink and background
+    flat = img_array.flatten()
+    hist, _ = np.histogram(flat, bins=256, range=(0, 256))
+    hist = hist.astype(float)
+    total = hist.sum()
+    sum_total = np.dot(np.arange(256), hist)
+    sum_bg, count_bg, best_thresh, best_var = 0.0, 0.0, 128, 0.0
+    for t in range(256):
+        count_bg += hist[t]
+        if count_bg == 0 or count_bg == total:
+            continue
+        count_fg = total - count_bg
+        sum_bg += t * hist[t]
+        mean_bg = sum_bg / count_bg
+        mean_fg = (sum_total - sum_bg) / count_fg
+        var = count_bg * count_fg * (mean_bg - mean_fg) ** 2
+        if var > best_var:
+            best_var, best_thresh = var, t
 
-    inverted = 255 - cropped
-    threshold = np.percentile(inverted, 88)
-    ink_mask = (inverted > threshold).astype(np.float32)
+    ink_mask = img_array < best_thresh  # dark pixels = ink
 
-    # Find centroid of ink
-    ink_coords = np.where(ink_mask > 0)
-    if len(ink_coords[0]) > 0:
-        cy = int(np.mean(ink_coords[0]))
-        cx = int(np.mean(ink_coords[1]))
+    # Bounding box of all ink
+    rows = np.any(ink_mask, axis=1)
+    cols = np.any(ink_mask, axis=0)
+    if not rows.any() or not cols.any():
+        region = img_array
     else:
-        cy, cx = ink_mask.shape[0] // 2, ink_mask.shape[1] // 2
+        y1, y2 = np.where(rows)[0][[0, -1]]
+        x1, x2 = np.where(cols)[0][[0, -1]]
 
-    ch, cw = ink_mask.shape
-    region_size = min(ch, cw) * 0.7
+        # Shrink inward by 15% to strip the drawn frame border
+        dy = int((y2 - y1) * 0.15)
+        dx = int((x2 - x1) * 0.15)
+        y1 = min(h - 1, y1 + dy)
+        y2 = max(0, y2 - dy)
+        x1 = min(w - 1, x1 + dx)
+        x2 = max(0, x2 - dx)
 
-    # Apply augmentation: random offset to centroid
-    if augment:
-        offset_range = int(region_size * 0.1)
-        cy += random.randint(-offset_range, offset_range)
-        cx += random.randint(-offset_range, offset_range)
+        region = img_array[y1:y2, x1:x2]
 
-    half_size = int(region_size // 2)
-    cy1 = max(0, cy - half_size)
-    cy2 = min(ch, cy + half_size)
-    cx1 = max(0, cx - half_size)
-    cx2 = min(cw, cx + half_size)
+    # Re-run Otsu on the cropped region for a tighter threshold, then binarize
+    flat = region.flatten()
+    hist, _ = np.histogram(flat, bins=256, range=(0, 256))
+    hist = hist.astype(float)
+    total = hist.sum()
+    sum_total = np.dot(np.arange(256), hist)
+    sum_bg2, count_bg2, best_thresh2, best_var2 = 0.0, 0.0, 128, 0.0
+    for t in range(256):
+        count_bg2 += hist[t]
+        if count_bg2 == 0 or count_bg2 == total:
+            continue
+        count_fg2 = total - count_bg2
+        sum_bg2 += t * hist[t]
+        mean_bg2 = sum_bg2 / count_bg2
+        mean_fg2 = (sum_total - sum_bg2) / count_fg2
+        var2 = count_bg2 * count_fg2 * (mean_bg2 - mean_fg2) ** 2
+        if var2 > best_var2:
+            best_var2, best_thresh2 = var2, t
 
-    centered_ink = ink_mask[cy1:cy2, cx1:cx2]
+    # Binary mask: 1.0 = ink, 0.0 = background
+    binary = (region < best_thresh2).astype(np.float32)
 
-    ink_img = Image.fromarray((centered_ink * 255).astype(np.uint8))
+    crop = Image.fromarray((binary * 255).astype(np.uint8))
 
-    # Apply augmentation: random rotation and scaling
     if augment:
         angle = random.uniform(-15, 15)
-        scale = random.uniform(0.9, 1.1)
-        new_size = int(ink_img.width * scale), int(ink_img.height * scale)
-        ink_img = ink_img.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False)
-        ink_img = ink_img.resize(new_size, Image.Resampling.BILINEAR)
-        # Center crop back to original size
-        w, h = ink_img.size
-        target_w, target_h = int(centered_ink.shape[1]), int(centered_ink.shape[0])
-        left = max(0, (w - target_w) // 2)
-        top = max(0, (h - target_h) // 2)
-        ink_img = ink_img.crop((left, top, left + target_w, top + target_h))
+        crop = crop.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False)
 
-    resized = ink_img.resize((grid_size, grid_size), Image.Resampling.BILINEAR)
+    resized = crop.resize((grid_size, grid_size), Image.Resampling.BILINEAR)
     resized_array = np.array(resized, dtype=np.float32) / 255.0
 
     return torch.tensor(resized_array.flatten(), dtype=torch.float32)
@@ -382,7 +400,7 @@ def load_model(path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train and test MLP classifier for X vs O")
-    parser.add_argument("-d", "--dir", type=str, nargs="+", default=["images", "images2"],
+    parser.add_argument("-d", "--dir", type=str, nargs="+", default=["trainingData"],
                         help="Directories containing images (default: images images2)")
     parser.add_argument("--train", action="store_true",
                         help="Train a new model")
