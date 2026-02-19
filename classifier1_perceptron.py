@@ -44,9 +44,9 @@ class ManualPerceptron(nn.Module):
     def _create_center_vs_ring_weights(self, size):
         """
         Weights that compute: (center intensity) - (ring intensity)
-        - Center zone (dist < 0.35): POSITIVE
-        - Ring zone (0.35 < dist < 0.7): NEGATIVE
-        - Outer zone (> 0.7): ZERO (ignored)
+        - Center zone (dist < 0.28): POSITIVE
+        - Ring zone (0.28 < dist < 0.65): NEGATIVE
+        - Outer zone (> 0.65): ZERO (ignored)
         """
         weights = np.zeros((size, size), dtype=np.float32)
         center = size / 2
@@ -60,10 +60,10 @@ class ManualPerceptron(nn.Module):
                 max_dist = np.sqrt(2) * center
                 normalized_dist = dist / max_dist
 
-                if normalized_dist < 0.35:
+                if normalized_dist < 0.28:
                     weights[i, j] = 1.0
                     center_count += 1
-                elif normalized_dist < 0.7:
+                elif normalized_dist < 0.65:
                     weights[i, j] = -1.0
                     ring_count += 1
 
@@ -245,7 +245,7 @@ def visualize_weights(grid_size=16):
     model = ManualPerceptron(grid_size=grid_size)
     weights = model.linear.weight.data.numpy().reshape(grid_size, grid_size)
 
-    print("Weight zones: + = center (positive), - = ring (negative), . = outer")
+    print("Weight zones: + = center <0.28 (positive), - = ring 0.28-0.65 (negative), . = outer")
     print()
 
     display = np.array(Image.fromarray(weights).resize((8, 8), Image.Resampling.BILINEAR))
