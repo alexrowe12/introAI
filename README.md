@@ -10,3 +10,5 @@ Train based on [directory]: ```python classifier2_mlp.py --train```
 Classify images: ```python classifier2_mlp.py -d [imgDirectory]```
 
 Classifier 1 is a single perceptron, classifier 2 is a multi-layered perceptron model, and classifier 3 is a convolutional neural network.
+
+test test
