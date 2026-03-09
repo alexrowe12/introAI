@@ -138,5 +138,66 @@ def main():
     print(f"  (approximately {probability:.10f})")
     print("=" * 50)
 
+    # Mathematical verification
+    stationary_distribution_check(P, P_100, target_states)
+
+def stationary_distribution_check(P, P_100, target_states):
+    """Check if we've converged to stationary distribution."""
+    print("\nStationary Distribution Check:")
+    print("-" * 40)
+
+    # Check 1: Probability should be same from ANY starting state
+    probs_from_each_start = []
+    for start_idx in range(NUM_STATES):
+        prob = sum(P_100[start_idx, idx] for idx in target_states)
+        probs_from_each_start.append(prob)
+
+    all_same = np.allclose(probs_from_each_start, probs_from_each_start[0])
+    print(f"Same probability from all {NUM_STATES} starting states? {all_same}")
+    print(f"  Min: {min(probs_from_each_start):.10f}")
+    print(f"  Max: {max(probs_from_each_start):.10f}")
+
+    # Check 2: P^100 ≈ P^101 (convergence)
+    P_101 = P_100 @ P
+    converged = np.allclose(P_100, P_101, atol=1e-10)
+    max_diff = np.max(np.abs(P_100 - P_101))
+    print(f"\nP^100 ≈ P^101 (converged)? {converged}")
+    print(f"  Max difference: {max_diff:.2e}")
+
+    # The stationary probability is just the sum of stationary probs for target states
+    # Since all rows of P^100 are ~identical, any row gives the stationary distribution
+    stationary_prob = sum(P_100[0, idx] for idx in target_states)
+    print(f"\nStationary probability for total=5L: {stationary_prob:.10f}")
+
+    return stationary_prob
+
+
+def monte_carlo_verify(num_simulations=1_000_000):
+    """Verify the result using Monte Carlo simulation."""
+    import random
+
+    print(f"\nMonte Carlo Verification ({num_simulations:,} simulations)...")
+
+    successes = 0
+    for _ in range(num_simulations):
+        # Start with empty buckets
+        a, b, c = 0, 0, 0
+
+        # Take 100 random steps
+        for _ in range(100):
+            action = random.choice(ACTIONS)
+            a, b, c = action(a, b, c)
+
+        # Check if total is 5
+        if a + b + c == 5:
+            successes += 1
+
+    empirical_prob = successes / num_simulations
+    print(f"Empirical probability: {empirical_prob}")
+    print(f"(Based on {successes:,} successes out of {num_simulations:,} trials)")
+    return empirical_prob
+
+
 if __name__ == "__main__":
     main()
+    monte_carlo_verify()
