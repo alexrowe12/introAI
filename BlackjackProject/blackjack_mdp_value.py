@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
 """
-Blackjack MDP model and policy iteration solver.
+Blackjack MDP model and value iteration solver.
 
 Models infinite-deck Blackjack as a Markov Decision Process and computes
-the optimal player policy using policy iteration.
+the optimal player policy using value iteration.
 
 State: (player_sum, dealer_showing, usable_ace)
 Actions: Hit, Stand
-
-Policy Iteration Algorithm:
-1. Initialize policy arbitrarily
-2. Policy Evaluation: Compute V^π for current policy
-3. Policy Improvement: Update policy greedily
-4. Repeat until policy converges
 """
 
 from typing import Dict, Tuple, List, Optional
@@ -26,7 +20,7 @@ STAND = 1
 
 class BlackjackMDP:
     """
-    MDP model for infinite-deck Blackjack using Policy Iteration.
+    MDP model for infinite-deck Blackjack.
 
     Attributes:
         card_probs: Dict mapping rank (1-13) to draw probability
@@ -51,15 +45,7 @@ class BlackjackMDP:
         self.V = np.zeros((22, 11, 2))
 
         # Policy: same shape, stores HIT or STAND
-        # Initialize with a simple policy: stand on 17+, hit otherwise
         self.policy = np.zeros((22, 11, 2), dtype=int)
-        for player_sum in range(4, 22):
-            for dealer_showing in range(1, 11):
-                for usable_ace in [0, 1]:
-                    if player_sum >= 17:
-                        self.policy[player_sum, dealer_showing, usable_ace] = STAND
-                    else:
-                        self.policy[player_sum, dealer_showing, usable_ace] = HIT
 
     def _build_card_probs(self, removed_rank: Optional[int]) -> Dict[int, float]:
         """Build probability distribution over card ranks."""
@@ -219,31 +205,9 @@ class BlackjackMDP:
 
         return expected_value
 
-    def _expected_action_value(self, player_sum: int, dealer_showing: int,
-                                usable_ace: bool, action: int) -> float:
+    def value_iteration(self, epsilon: float = 1e-9, max_iterations: int = 1000) -> int:
         """
-        Compute expected value of taking a specific action in a state.
-
-        Args:
-            player_sum: Player's current hand value
-            dealer_showing: Dealer's up-card value (1-10)
-            usable_ace: Whether player has a usable ace
-            action: HIT or STAND
-
-        Returns:
-            Expected value of taking the action
-        """
-        if action == STAND:
-            return self.expected_stand_value(player_sum, dealer_showing)
-        else:  # HIT
-            return self.expected_hit_value(player_sum, dealer_showing, usable_ace)
-
-    def policy_evaluation(self, epsilon: float = 1e-9, max_iterations: int = 1000) -> int:
-        """
-        Evaluate the current policy by computing V^π.
-
-        This computes the value function for the current fixed policy
-        by iterating until convergence.
+        Run value iteration to compute optimal policy.
 
         Args:
             epsilon: Convergence threshold
@@ -252,6 +216,9 @@ class BlackjackMDP:
         Returns:
             Number of iterations until convergence
         """
+        # Clear dealer cache in case card probs changed
+        self._dealer_probs_cache = {}
+
         for iteration in range(max_iterations):
             delta = 0.0
 
@@ -259,106 +226,32 @@ class BlackjackMDP:
             for player_sum in range(4, 22):  # 4-21 (min 2-card hand is 4)
                 for dealer_showing in range(1, 11):  # 1-10
                     for usable_ace in [0, 1]:
-                        # Get the action from current policy
-                        action = self.policy[player_sum, dealer_showing, usable_ace]
-
-                        # Compute value under this policy's action
                         if player_sum == 21:
-                            # At 21, always stand regardless of policy
-                            new_value = self.expected_stand_value(player_sum, dealer_showing)
+                            # At 21, always stand
+                            stand_val = self.expected_stand_value(player_sum, dealer_showing)
+                            new_value = stand_val
+                            action = STAND
                         else:
-                            new_value = self._expected_action_value(
-                                player_sum, dealer_showing, bool(usable_ace), action
-                            )
+                            stand_val = self.expected_stand_value(player_sum, dealer_showing)
+                            hit_val = self.expected_hit_value(player_sum, dealer_showing, bool(usable_ace))
+
+                            if hit_val > stand_val:
+                                new_value = hit_val
+                                action = HIT
+                            else:
+                                new_value = stand_val
+                                action = STAND
 
                         old_value = self.V[player_sum, dealer_showing, usable_ace]
                         delta = max(delta, abs(new_value - old_value))
+
                         self.V[player_sum, dealer_showing, usable_ace] = new_value
+                        self.policy[player_sum, dealer_showing, usable_ace] = action
 
             if delta < epsilon:
                 return iteration + 1
 
         return max_iterations
-
-    def policy_improvement(self) -> bool:
-        """
-        Improve the policy based on current value function.
-
-        For each state, choose the action that maximizes expected value.
-
-        Returns:
-            True if policy changed, False if policy is stable (converged)
-        """
-        policy_stable = True
-
-        for player_sum in range(4, 22):
-            for dealer_showing in range(1, 11):
-                for usable_ace in [0, 1]:
-                    old_action = self.policy[player_sum, dealer_showing, usable_ace]
-
-                    if player_sum == 21:
-                        # At 21, always stand
-                        best_action = STAND
-                    else:
-                        # Compute value of each action
-                        stand_val = self.expected_stand_value(player_sum, dealer_showing)
-                        hit_val = self.expected_hit_value(player_sum, dealer_showing, bool(usable_ace))
-
-                        if hit_val > stand_val:
-                            best_action = HIT
-                        else:
-                            best_action = STAND
-
-                    self.policy[player_sum, dealer_showing, usable_ace] = best_action
-
-                    if old_action != best_action:
-                        policy_stable = False
-
-        return not policy_stable  # Return True if policy changed
-
-    def policy_iteration(self, epsilon: float = 1e-9, max_iterations: int = 100) -> Tuple[int, int]:
-        """
-        Run policy iteration to compute optimal policy.
-
-        Alternates between policy evaluation and policy improvement
-        until the policy converges.
-
-        Args:
-            epsilon: Convergence threshold for policy evaluation
-            max_iterations: Maximum number of policy improvement iterations
-
-        Returns:
-            Tuple of (number of policy iterations, total evaluation iterations)
-        """
-        # Clear dealer cache in case card probs changed
-        self._dealer_probs_cache = {}
-
-        total_eval_iterations = 0
-
-        for policy_iter in range(max_iterations):
-            # Step 1: Policy Evaluation - compute V^π
-            eval_iters = self.policy_evaluation(epsilon)
-            total_eval_iterations += eval_iters
-
-            # Step 2: Policy Improvement - update π greedily
-            policy_changed = self.policy_improvement()
-
-            if not policy_changed:
-                # Policy has converged - we're done
-                return policy_iter + 1, total_eval_iterations
-
-        return max_iterations, total_eval_iterations
-
-    # Keep value_iteration as an alias for backward compatibility
-    def value_iteration(self, epsilon: float = 1e-9, max_iterations: int = 1000) -> int:
-        """
-        Backward-compatible method that calls policy_iteration.
-
-        Returns:
-            Number of policy iterations (not total evaluation iterations)
-        """
-        policy_iters, _ = self.policy_iteration(epsilon, max_iterations)
-        return policy_iters
 
     def get_policy(self, player_sum: int, dealer_showing: int, usable_ace: bool) -> int:
         """Get optimal action for a state."""
@@ -453,11 +346,11 @@ class BlackjackMDP:
 
 
 def main():
-    """Test the MDP solver using policy iteration."""
-    print("Solving standard Blackjack MDP using Policy Iteration...")
+    """Test the MDP solver."""
+    print("Solving standard Blackjack MDP...")
     mdp = BlackjackMDP()
-    policy_iters, total_eval_iters = mdp.policy_iteration()
-    print(f"Converged in {policy_iters} policy iterations ({total_eval_iters} total evaluation iterations)")
+    iterations = mdp.value_iteration()
+    print(f"Converged in {iterations} iterations")
 
     expected_return = mdp.compute_expected_return()
     print(f"Expected return under optimal play: {expected_return:.6f}")
