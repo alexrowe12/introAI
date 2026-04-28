@@ -3,8 +3,8 @@
 Practice table for the finite-deck Blackjack tournament.
 
 Run this in a second terminal next to exact_tournament_agent.py. This script
-simulates the classroom table and tells you what visible cards to type into
-the exact agent, but it does not make the live keystrokes for you.
+simulates the classroom table. By default it does not tell you exact agent
+commands; use --hints for a guided drill.
 """
 
 from __future__ import annotations
@@ -84,6 +84,7 @@ class PracticeTable:
         auto: bool = False,
         strict: bool = False,
         show_hidden_deck: bool = False,
+        hints: bool = False,
     ):
         if players < 1:
             raise ValueError("players must be at least 1")
@@ -98,6 +99,7 @@ class PracticeTable:
         self.auto = auto
         self.strict = strict
         self.show_hidden_deck = show_hidden_deck
+        self.hints = hints
         self.rng = random.Random(seed)
         self.deck: List[int] = []
         self.round_no = 0
@@ -106,6 +108,10 @@ class PracticeTable:
         self.solver = ExactFiniteDeckSolver(rules)
         self.agent_known_deck: Deck = initial_deck(rules.removed_value)
         self.shuffle()
+
+    def hint(self, text: str = "") -> None:
+        if self.hints:
+            print(text)
 
     def shuffle(self) -> None:
         counts = initial_deck(self.rules.removed_value)
@@ -125,7 +131,7 @@ class PracticeTable:
         self.shuffle()
         self.agent_known_deck = initial_deck(self.rules.removed_value)
         print("\n*** TABLE SHUFFLED / NEW NO-5s DECK ***")
-        print("Type in exact agent: r")
+        self.hint("Agent hint: r")
         self.pause()
 
     def run(self) -> None:
@@ -135,9 +141,10 @@ class PracticeTable:
         print(f"Dealer: {'H17' if self.rules.dealer_hits_soft_17 else 'S17'}")
         print("Natural blackjack pays normal win (+1). Doubling is allowed.")
         print()
-        print("Open another terminal and run: python3 exact_tournament_agent.py")
-        print("Then type the suggested commands into that exact-agent terminal.")
-        self.pause("Press Enter when your exact agent is open, or q to quit: ")
+        print("Use your agent separately if you want recommendations.")
+        if self.hints:
+            print("Guided hints are ON.")
+        self.pause("Press Enter to start, or q to quit: ")
 
         for round_no in range(1, self.rounds + 1):
             self.round_no = round_no
@@ -173,11 +180,11 @@ class PracticeTable:
         print(f"Your hand: P{self.your_index + 1} {your_hand.label()}")
         self.print_visible_initial(hands)
 
-        print("\nType in exact agent:")
-        print(f"  n {format_cards(your_hand.cards)} {format_card(dealer_up)}")
+        self.hint("\nAgent hints:")
+        self.hint(f"  n {format_cards(your_hand.cards)} {format_card(dealer_up)}")
         visible_initial = self.visible_initial_cards(hands)
         if visible_initial:
-            print(f"  o {format_cards(visible_initial)}")
+            self.hint(f"  o {format_cards(visible_initial)}")
             self._remove_known(visible_initial)
         self.pause()
 
@@ -220,7 +227,7 @@ class PracticeTable:
         if hand.natural:
             hand.stood = True
             print("You have natural blackjack. It pays as a normal win.")
-            print("Exact agent should say STAND.")
+            self.hint("Agent hint: s")
             return True
 
         while True:
@@ -249,7 +256,7 @@ class PracticeTable:
 
             if action == STAND:
                 hand.stood = True
-                print("Type in exact agent: s")
+                self.hint("Agent hint: s")
                 self.pause()
                 return True
 
@@ -266,7 +273,7 @@ class PracticeTable:
                 self._remove_known([card])
                 print(f"Double card: {format_card(card)}")
                 print(f"Your final hand: {hand.label()}")
-                print(f"Type in exact agent: x {format_card(card)}")
+                self.hint(f"Agent hint: x {format_card(card)}")
                 self.pause()
                 return True
 
@@ -276,15 +283,17 @@ class PracticeTable:
                 self._remove_known([card])
                 print(f"Hit card: {format_card(card)}")
                 print(f"Your hand: {hand.label()}")
-                print(f"Type in exact agent: h {format_card(card)}")
+                self.hint(f"Agent hint: h {format_card(card)}")
                 self.pause()
                 continue
 
     def ask_recommendation(self, best: str) -> Optional[str]:
-        print("Look at exact_tournament_agent.py and type its recommendation.")
-        print("Use h for HIT, s for STAND, x for DOUBLE. Press Enter to skip.")
+        print("Enter your agent's recommendation, or press Enter to skip.")
         while True:
-            raw = input(f"Agent recommendation [{best.lower()[0]} expected by simulator]: ").strip().lower()
+            prompt = "Agent recommendation [h/s/x or Enter]: "
+            if self.hints:
+                prompt = f"Agent recommendation [{best.lower()[0]} expected]: "
+            raw = input(prompt).strip().lower()
             if raw == "":
                 return None
             if raw == "q":
@@ -375,7 +384,7 @@ class PracticeTable:
         if self.visibility != "all":
             return
         print(f"\nVisible: P{index + 1} {action} card {format_card(card)}")
-        print(f"Type in exact agent: o {format_card(card)}")
+        self.hint(f"Agent hint: o {format_card(card)}")
         self._remove_known([card])
         self.pause()
 
@@ -427,7 +436,7 @@ class PracticeTable:
         dealer_total, usable = dealer.total()
         kind = "soft" if usable else "hard"
         print(f"Dealer: {format_cards(dealer.cards)} = {dealer_total} ({kind})")
-        print(f"Type in exact agent: e {format_cards(dealer.cards)}")
+        self.hint(f"Agent hint: e {format_cards(dealer.cards)}")
         self.pause()
         self._remove_known(dealer.cards[1:])
 
@@ -461,7 +470,7 @@ class PracticeTable:
         raw = input(f"{prompt} [y/N]: ").strip().lower()
         return raw in ("y", "yes")
 
-    def pause(self, prompt: str = "After typing into exact agent, press Enter to continue: ") -> None:
+    def pause(self, prompt: str = "Press Enter to continue: ") -> None:
         if self.auto:
             return
         raw = input(prompt).strip().lower()
@@ -485,6 +494,7 @@ def self_test() -> None:
         rules=rules,
         seed=7,
         auto=True,
+        hints=True,
     )
     for i in range(3):
         table.round_no = i + 1
@@ -509,6 +519,7 @@ def parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
     parser.add_argument("--reshuffle-threshold", type=int, default=0)
     parser.add_argument("--strict", action="store_true", help="warn and reprompt on mismatch")
     parser.add_argument("--show-hidden-deck", action="store_true", help="debug: show hidden deck count")
+    parser.add_argument("--hints", action="store_true", help="print exact-agent command hints")
     parser.add_argument("--classroom", action="store_true", help="use classroom-like defaults")
     parser.add_argument("--self-test", action="store_true", help="run noninteractive checks")
     parser.add_argument("--auto", action="store_true", help="noninteractive auto-play")
@@ -544,6 +555,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         auto=args.auto,
         strict=args.strict,
         show_hidden_deck=args.show_hidden_deck,
+        hints=args.hints,
     )
     try:
         table.run()
