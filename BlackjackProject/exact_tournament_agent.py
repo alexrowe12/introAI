@@ -3,7 +3,7 @@
 Exact finite-deck Blackjack tournament agent.
 
 This script preserves the older tournament_agent.py and implements a stronger
-hit/stand decision engine for the no-5s finite-deck tournament. It uses exact
+hit/stand/double decision engine for the no-5s finite-deck tournament. It uses exact
 expectimax over the remaining deck, with memoization, instead of approximating
 future draws with fixed probabilities.
 
@@ -11,6 +11,7 @@ Fast commands:
     n 7 9 6        start hand: player 7, player 9, dealer 6
     h T            record hit card
     s              stand
+    x 6            double down: record one card, then stand
     e 6 T 8        end hand / record dealer cards
     o 2 A K        record observed cards from other hands
     u              undo last mutation
@@ -38,6 +39,7 @@ Deck = Tuple[int, ...]  # indexes 0..9 represent values A..10
 
 HIT = "HIT"
 STAND = "STAND"
+DOUBLE = "DOUBLE"
 
 
 @dataclass
@@ -46,10 +48,11 @@ class Rules:
 
     removed_value: int = 5
     dealer_hits_soft_17: bool = False
-    blackjack_payout: float = 1.5
+    blackjack_payout: float = 1.0
     dealer_peek: bool = False
     scoring_mode: str = "chip_ev"  # "chip_ev" or "flat_round"
     shuffle_threshold: int = 0
+    double_after_hit: bool = False
 
     def reward_blackjack(self) -> float:
         if self.scoring_mode == "flat_round":
@@ -62,10 +65,12 @@ class Decision:
     action: str
     hit_ev: float
     stand_ev: float
+    double_ev: float = -math.inf
 
     @property
     def edge(self) -> float:
-        return abs(self.hit_ev - self.stand_ev)
+        values = sorted([self.hit_ev, self.stand_ev, self.double_ev], reverse=True)
+        return values[0] - values[1]
 
 
 @dataclass
@@ -76,6 +81,7 @@ class Snapshot:
     dealer_up: Optional[int]
     hand_active: bool
     hand_counted: bool
+    doubled: bool
     hands_played: int
     wins: int
     losses: int
@@ -188,17 +194,29 @@ class ExactFiniteDeckSolver:
         dealer_up: int,
         deck: Deck,
         player_natural: bool = False,
+        can_double: bool = False,
     ) -> Decision:
         stand_ev = self.stand_ev(
             player_total, usable_ace, dealer_up, deck, player_natural
         )
 
         if player_total >= 21 or player_natural:
-            return Decision(STAND, -math.inf, stand_ev)
+            return Decision(STAND, -math.inf, stand_ev, -math.inf)
 
         hit_ev = self.hit_ev(player_total, usable_ace, dealer_up, deck)
-        action = HIT if hit_ev > stand_ev else STAND
-        return Decision(action, hit_ev, stand_ev)
+        double_ev = (
+            self.double_ev(player_total, usable_ace, dealer_up, deck)
+            if can_double
+            else -math.inf
+        )
+
+        action_values = {
+            HIT: hit_ev,
+            STAND: stand_ev,
+            DOUBLE: double_ev,
+        }
+        action = max(action_values, key=action_values.get)
+        return Decision(action, hit_ev, stand_ev, double_ev)
 
     def best_ev(
         self,
@@ -207,9 +225,15 @@ class ExactFiniteDeckSolver:
         dealer_up: int,
         deck: Deck,
         player_natural: bool = False,
+        can_double: bool = False,
     ) -> float:
         return self._player_value(
-            player_total, bool(usable_ace), dealer_up, self._draw_deck(deck), player_natural
+            player_total,
+            bool(usable_ace),
+            dealer_up,
+            self._draw_deck(deck),
+            player_natural,
+            can_double,
         )
 
     @lru_cache(maxsize=750_000)
@@ -220,6 +244,7 @@ class ExactFiniteDeckSolver:
         dealer_up: int,
         deck: Deck,
         player_natural: bool,
+        can_double: bool,
     ) -> float:
         if player_total > 21:
             return -1.0
@@ -231,6 +256,8 @@ class ExactFiniteDeckSolver:
             return stand
 
         hit = self.hit_ev(player_total, usable_ace, dealer_up, deck)
+        if can_double:
+            return max(hit, stand, self.double_ev(player_total, usable_ace, dealer_up, deck))
         return max(hit, stand)
 
     def hit_ev(
@@ -248,6 +275,27 @@ class ExactFiniteDeckSolver:
                 ev += prob * -1.0
             else:
                 ev += prob * self._player_value(
+                    next_total, next_usable, dealer_up, next_deck, False, False
+                )
+
+        return ev
+
+    def double_ev(
+        self, player_total: int, usable_ace: bool, dealer_up: int, deck: Deck
+    ) -> float:
+        """Expected value of doubling: one card, then forced stand, double stakes."""
+        draw_deck = self._draw_deck(deck)
+        total_cards = deck_total(draw_deck)
+        ev = 0.0
+
+        for value, count in self._available(draw_deck):
+            prob = count / total_cards
+            next_deck = decrement(draw_deck, value)
+            next_total, next_usable = add_to_hand(player_total, usable_ace, value)
+            if next_total > 21:
+                ev += prob * -2.0
+            else:
+                ev += prob * 2.0 * self.stand_ev(
                     next_total, next_usable, dealer_up, next_deck, False
                 )
 
@@ -384,6 +432,7 @@ class ExactTournamentAgent:
         self.dealer_up: Optional[int] = None
         self.hand_active = False
         self.hand_counted = False
+        self.doubled = False
         self.observe_enabled = True
 
         self.hands_played = 0
@@ -404,12 +453,14 @@ class ExactTournamentAgent:
                     dealer_peek=self.rules.dealer_peek,
                     scoring_mode=self.rules.scoring_mode,
                     shuffle_threshold=self.rules.shuffle_threshold,
+                    double_after_hit=self.rules.double_after_hit,
                 ),
                 deck=self.deck,
                 player_cards=tuple(self.player_cards),
                 dealer_up=self.dealer_up,
                 hand_active=self.hand_active,
                 hand_counted=self.hand_counted,
+                doubled=self.doubled,
                 hands_played=self.hands_played,
                 wins=self.wins,
                 losses=self.losses,
@@ -428,6 +479,7 @@ class ExactTournamentAgent:
         self.dealer_up = snapshot.dealer_up
         self.hand_active = snapshot.hand_active
         self.hand_counted = snapshot.hand_counted
+        self.doubled = snapshot.doubled
         self.hands_played = snapshot.hands_played
         self.wins = snapshot.wins
         self.losses = snapshot.losses
@@ -450,6 +502,7 @@ class ExactTournamentAgent:
         self.dealer_up = None
         self.hand_active = False
         self.hand_counted = False
+        self.doubled = False
         self.solver.clear()
         return self.status("Deck reset/shuffled.")
 
@@ -461,6 +514,7 @@ class ExactTournamentAgent:
         self.dealer_up = None
         self.hand_active = False
         self.hand_counted = False
+        self.doubled = False
 
         ok, message = self._remove_cards(cards)
         if not ok:
@@ -475,6 +529,8 @@ class ExactTournamentAgent:
     def hit(self, card: int) -> str:
         if not self.hand_active:
             return "No active hand. Use: n <p1> <p2> <dealer_up>"
+        if self.doubled:
+            return "Already doubled. Enter dealer cards with: e <cards>"
 
         self.snapshot()
         ok, message = self._remove_cards([card])
@@ -490,6 +546,32 @@ class ExactTournamentAgent:
             return self.status("BUST. Loss recorded. Use e <dealer cards> if you need to track revealed dealer cards.")
 
         return self.status()
+
+    def double_down(self, card: int) -> str:
+        if not self.hand_active:
+            return "No active hand. Use: n <p1> <p2> <dealer_up>"
+        if self.doubled:
+            return "Already doubled. Enter dealer cards with: e <cards>"
+        if not self._can_double():
+            return "Double is only legal on the initial two-card hand."
+
+        self.snapshot()
+        ok, message = self._remove_cards([card])
+        if not ok:
+            self.undo()
+            return message
+
+        self.player_cards.append(card)
+        self.doubled = True
+        total, _ = evaluate_hand(self.player_cards)
+        if total > 21:
+            self.hand_active = False
+            self._record_result("lose", -2.0)
+            return self.status(
+                "DOUBLE BUST. Double loss recorded. Use e <dealer cards> if you need to track revealed dealer cards."
+            )
+
+        return self.status("Doubled. Forced stand. Enter dealer cards with: e <cards>")
 
     def stand(self) -> str:
         if not self.player_cards:
@@ -538,6 +620,8 @@ class ExactTournamentAgent:
             outcome, reward = self._actual_outcome(
                 player_total, dealer_total, player_nat, dealer_nat
             )
+            if self.doubled:
+                reward *= 2.0
             self._record_result(outcome, reward)
             result_line = (
                 f"Dealer: {format_cards(dealer_cards)} = {dealer_total}\n"
@@ -548,6 +632,7 @@ class ExactTournamentAgent:
         self.dealer_up = None
         self.hand_active = False
         self.hand_counted = False
+        self.doubled = False
         return self.status(result_line)
 
     def observe(self, cards: List[int]) -> str:
@@ -589,6 +674,10 @@ class ExactTournamentAgent:
                 if threshold < 0:
                     return "Shuffle threshold must be non-negative."
                 self.rules.shuffle_threshold = threshold
+            elif key in ("double", "double_after_hit"):
+                if value not in ("initial", "afterhit", "after_hit", "any"):
+                    return "Use: set double initial|any"
+                self.rules.double_after_hit = value in ("afterhit", "after_hit", "any")
             elif key in ("removed", "remove"):
                 removed = parse_card(value)
                 self.rules.removed_value = removed
@@ -597,6 +686,7 @@ class ExactTournamentAgent:
                 self.dealer_up = None
                 self.hand_active = False
                 self.hand_counted = False
+                self.doubled = False
             else:
                 return f"Unknown rule '{key}'."
         finally:
@@ -647,10 +737,12 @@ class ExactTournamentAgent:
             return ""
         if total > 21:
             return ">>> BUST"
+        if self.doubled:
+            return ">>> FORCED STAND after DOUBLE. Enter dealer cards with: e <cards>"
 
         player_natural = len(self.player_cards) == 2 and total == 21
         decision = self.solver.decision(
-            total, usable, self.dealer_up, self.deck, player_natural
+            total, usable, self.dealer_up, self.deck, player_natural, self._can_double()
         )
 
         if player_natural:
@@ -667,11 +759,11 @@ class ExactTournamentAgent:
         elif decision.edge < 0.12:
             confidence = "medium"
 
-        return (
-            f">>> {decision.action} ({confidence}) | "
-            f"H {decision.hit_ev:+.4f} / S {decision.stand_ev:+.4f} / "
-            f"diff {decision.hit_ev - decision.stand_ev:+.4f}"
-        )
+        values = f"H {decision.hit_ev:+.4f} / S {decision.stand_ev:+.4f}"
+        if math.isfinite(decision.double_ev):
+            values += f" / D {decision.double_ev:+.4f}"
+
+        return f">>> {decision.action} ({confidence}) | {values} / edge {decision.edge:+.4f}"
 
     def compact_deck(self) -> str:
         labels = []
@@ -692,12 +784,14 @@ class ExactTournamentAgent:
         peek = "ON" if self.rules.dealer_peek else "OFF"
         observe = "ON" if self.observe_enabled else "OFF"
         score = self.rules.scoring_mode
+        double_rule = "any hand" if self.rules.double_after_hit else "initial two cards only"
         return (
             "Rules:\n"
             f"  removed value: {format_card(self.rules.removed_value)}\n"
             f"  dealer: {dealer}\n"
             f"  dealer peek conditioning: {peek}\n"
             f"  blackjack payout: {self.rules.blackjack_payout:g}\n"
+            f"  double down: allowed, {double_rule}\n"
             f"  scoring mode: {score}\n"
             f"  shuffle threshold: {self.rules.shuffle_threshold}\n"
             f"  observe mode: {observe}"
@@ -717,6 +811,7 @@ class ExactTournamentAgent:
 Fast commands:
   n 7 9 6        new hand: player 7, player 9, dealer 6
   h T            hit card
+  x 6            double down: take one card, double stakes, forced stand
   s              stand
   e 6 T 8        end hand / record dealer cards
   e T 8          also accepted; dealer upcard is prepended
@@ -726,7 +821,8 @@ Fast commands:
   rules          show rule assumptions
   set dealer s17|h17
   set peek on|off
-  set bj 1.5
+  set bj 1.0
+  set double initial|any
   set score chip|flat
   set shuffle N
   u              undo
@@ -767,6 +863,15 @@ Fast commands:
         if player_total < dealer_total:
             return "lose", -1.0
         return "push", 0.0
+
+    def _can_double(self) -> bool:
+        if self.doubled or self.hand_counted:
+            return False
+        if len(self.player_cards) < 2:
+            return False
+        if self.rules.double_after_hit:
+            return True
+        return len(self.player_cards) == 2
 
     def _record_result(self, outcome: str, reward: float) -> None:
         if self.hand_counted:
@@ -828,6 +933,11 @@ Fast commands:
             if len(cards) != 1:
                 return "Usage: h <card>"
             return self.hit(cards[0])
+        if cmd in ("x", "double", "double_down"):
+            cards = parse_cards(arg)
+            if len(cards) != 1:
+                return "Usage: x <card>"
+            return self.double_down(cards[0])
         if cmd in ("s", "stand"):
             return self.stand()
         if cmd in ("e", "end"):
@@ -873,10 +983,11 @@ def self_test() -> None:
     assert agent.deck == before
 
     solver = agent.solver
-    decision = solver.decision(16, False, 10, agent.deck)
-    assert decision.action in (HIT, STAND)
+    decision = solver.decision(16, False, 10, agent.deck, can_double=True)
+    assert decision.action in (HIT, STAND, DOUBLE)
     assert math.isfinite(decision.stand_ev)
     assert math.isfinite(decision.hit_ev)
+    assert math.isfinite(decision.double_ev)
 
     outcomes = solver._dealer_outcomes(16, False, agent.deck)
     assert abs(sum(outcomes.values()) - 1.0) < 1e-9
@@ -887,6 +998,14 @@ def self_test() -> None:
     assert "Hand:" in out
     assert agent.deck == before
 
+    out = agent.start_hand([6, 4, 6])
+    assert "D " in out
+    out = agent.double_down(10)
+    assert "Doubled" in out or "DOUBLE BUST" in out
+    if "Doubled" in out:
+        out = agent.end_hand([6, 10])
+        assert "Result:" in out
+
     print("self-test passed")
 
 
@@ -895,7 +1014,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--self-test", action="store_true", help="run internal checks")
     parser.add_argument("--h17", action="store_true", help="dealer hits soft 17")
     parser.add_argument("--peek", action="store_true", help="condition on dealer peek/no blackjack")
-    parser.add_argument("--bj", type=float, default=1.5, help="blackjack payout")
+    parser.add_argument("--bj", type=float, default=1.0, help="blackjack payout")
     parser.add_argument(
         "--score",
         choices=("chip", "flat"),
